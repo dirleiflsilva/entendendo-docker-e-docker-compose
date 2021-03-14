@@ -36,7 +36,7 @@ Nosso projeto será uma aplicação simples para envio de e-mails com Workers, n
 
 Podemos visualizar a estrutura desses serviços conforme segue.
 
-![Componentes](images/app-docker-compose.png)
+![componentes](images/app-docker-compose.png)
 
 O Docker Compose usa um arquivo de configuração no padrão [YAML](https://yaml.org), que tem sua especificação neste [link](https://github.com/compose-spec/compose-spec/blob/master/spec.md). Mesmo que nas especificações atualizadas alguns detalhes da criação e conteúdo do arquivo *yaml* sejam diferentes do que as utilizadas neste projeto, por compatibilidade, vamos manter o padrão comumente aceito, ou seja, o nome do arquivo será `docker-compose.yaml`, a extensão *yml* também é aceita, e será informada a versão do mesmo.
 
@@ -85,8 +85,9 @@ Para que isto não aconteça e os dados sejam perdidos, vamos dizer para nosso c
 
 No nosso projeto vamos criar as pastas `postgres_data` e `scripts`, como pode ser observado na imagem abaixo.
 
+![pastas](images/folder-docker-compose.png)
 
-Em `scripts`, vamos criar 2 arquivos: *init.sql*, onde vamos criar o banco de dados `email_sender` e definir a tabela `emails`, no arquivo *check.sql*, vamos listar os bancos de dados, conectar no banco `email_sender` e mostrar como a tabela `emails` está configurada.
+Em `scripts`, vamos gerar 2 arquivos: *init.sql*, onde vamos criar o banco de dados `email_sender` e definir a tabela `emails`, no arquivo *check.sql*, vamos listar os bancos de dados, conectar no banco `email_sender` e mostrar como a tabela `emails` está configurada.
 
 `scripts/init.sql`
 ```sql
