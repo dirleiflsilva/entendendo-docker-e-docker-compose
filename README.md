@@ -74,7 +74,7 @@ De forma similar, podemos executar um comando interno do PostgreSQL no container
 docker-compose exec db psql -U postgres -c '\l'
 ```
 
-E finalmente podemos parar o serviço e remover o container, que foi declarado no docker-compose.yml como o comando abaixo:
+E finalmente podemos parar o serviço e remover o container, que foi declarado no `docker-compose.yaml` com o comando abaixo:
 
 ```bash
 docker-compose down
@@ -89,7 +89,7 @@ No nosso projeto vamos criar as pastas `postgres_data` e `scripts`, como pode se
 
 Em `scripts`, vamos gerar 2 arquivos: *init.sql*, onde vamos criar o banco de dados `email_sender` e definir a tabela `emails`, no arquivo *check.sql*, vamos listar os bancos de dados, conectar no banco `email_sender` e mostrar como a tabela `emails` está configurada.
 
-`scripts/init.sql`
+__*scripts/init.sql*__
 ```sql
 CREATE DATABASE email_sender;
 
@@ -103,7 +103,7 @@ CREATE TABLE emails (
 );
 ```
 
-`scripts/check.sql`
+__*scripts/check.sql*__
 ```sql
 \l
 \c email_sender
@@ -136,3 +136,70 @@ docker-compose up -d
 
 docker-compose exec db psql -U postgres -f /scripts/check.sql
 ```
+
+## Vamos ao Front-End
+
+Nosso próximo passo é criar um serviço web, para isto vamos utilizar o [Nginx](https://nginx.org), que neste primeiro momento proverá apenas uma página estática simples, sem nenhuma ação por trás. Para isso vamos ajustar o nosso arquivo `docker-compose.yaml` e criar um volume, onde será gerado um arquivo *index.html*.
+
+```yaml
+version: '3'
+volumes:
+  dados:
+services:
+  db:
+    image: postgres:9.6
+    environment:
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      # volume dos dados
+      - ./postgres_data:/var/lib/postgresql/data
+      # scripts
+      - ./scripts:/scripts
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+  frontend:
+    image: nginx:1.13
+    volumes:
+      - ./web:/usr/share/nginx/html/
+    ports:
+      - 8080:80
+```
+__*web/index.html*__
+```html
+<html>
+    <head>
+        <meta charset='uft-8'>
+        <title>E-mail Sender</title>
+        <style>
+            label { display: block; }
+            textarea, input { width: 400px; }
+        </style>
+    </head>
+    <body class="container">
+        <h1>E-mail Sender</h1>
+        <form action="">
+            <div>
+                <label for="assunto">Assunto</label>
+                <input type="text" name="assunto">
+            </div>
+
+            <div>
+                <label for="mensagem">Mensagem</label>
+                <textarea name="mensagem" cols="50" rows="6"></textarea>
+            </div>
+
+            <div>
+                <button>Enviar !</button>
+            </div>
+        </form>
+    </body>
+</html>
+```
+
+Depois de subir os serviços, podemos verificar o log dos mesmos pelo comando abaixo:
+
+```bash
+docker-compose logs -f -t
+```
+
+
+
