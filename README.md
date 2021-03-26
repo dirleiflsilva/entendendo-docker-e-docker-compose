@@ -8,7 +8,7 @@ Página de documentação do [Docker](https://docs.docker.com/).
 
 Página de documentação do [Docker Compose](https://docs.docker.com/compose/).
 
-Vou tentar trazer as informações de maneira prática e objetiva, mas aumentando a complexidade das coisas aos poucos, como nós programadores aprendemos: precisamos abstrair a complexidade do problema a ser resolvido, ou seja, vamos dividir um problema "grandão" em pequenos problemas e resolvê-los por partes.
+Vou tentar trazer as informações de maneira prática e objetiva, mas aumentando a complexidade das coisas aos poucos, como nós programadores aprendemos: precisamos abstrair a complexidade do problema a ser resolvido, ou seja, vamos dividir um "problemão" em pequenos problemas e resolvê-los por partes.
 
 Mas para isso precisamos primeiro definir qual é o nosso problema e como vamos usar as ferramentas que temos disponíveis para chegar ao nosso objetivo.
 
@@ -34,7 +34,7 @@ Nosso projeto será uma aplicação simples para envio de e-mails com Workers, n
 * Workers para envio de e-mail
 * Aplicação principal
 
-Podemos visualizar a estrutura desses serviços conforme segue.
+Podemos visualizar a estrutura final desses serviços conforme segue.
 
 ![componentes](images/app-docker-compose.png)
 
@@ -42,7 +42,7 @@ O Docker Compose usa um arquivo de configuração no padrão [YAML](https://yaml
 
 ## Iniciando com o banco de dados
 
-Vamos utilizar o [PostgreSQL 9.6](https://hub.docker.com/_/postgres) para persistir nosso dados, um detalhe no desenvolvimento de um projeto com vários serviços é utilizar uma versão específica dos componentes, isto vai evitar que sua aplicação quebre, pois no Docker, quando não é informada a versão, será utilizada a mais recente, com a tag *latest*.
+Vamos utilizar o [PostgreSQL 9.6](https://www.postgresql.org) para persistir nosso dados, um detalhe no desenvolvimento de um projeto com vários serviços é utilizar uma versão específica dos componentes, isto vai evitar que sua aplicação quebre, pois no Docker, quando não é informada a versão, será utilizada a mais recente, com a tag *latest*.
 
 ```yaml
 version: '3'
@@ -52,7 +52,7 @@ services:
     environment:
       POSTGRES_PASSWORD: postgres
 ```
-Aqui temos a estrutura básica do `docker-compose.yaml`, onde declaramos que estamos utilizando a versão 3, definindo as capacidades do docker-compose, este detalhe tentaremos explorar mais a fundo em outro momento. Note que foi informada uma variável de ambiente para definir uma senha para o usuário postgres, isto foi necessário pois as imagens oficiais do PostgreSQL passaram a exigir isto.
+Aqui temos a estrutura básica do `docker-compose.yaml`, onde declaramos que estamos utilizando a versão 3, definindo as capacidades do docker-compose, este detalhe tentaremos explorar mais a fundo em outro momento. Note que foi informada uma variável de ambiente para definir uma senha para o usuário *postgres*, isto foi necessário pois as imagens oficiais do PostgreSQL passaram a exigir isto.
 
 Para que a mágica aconteça, só precisamos digitar o comando abaixo, que levanta o serviço em modo *daemon*:
 
@@ -129,6 +129,8 @@ services:
       - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
 ```
 
+Para maiores informações sobre como utilizar um script de inicialização no container do PostgreSQL, procure a sessão [Initialization scripts](https://hub.docker.com/_/postgres) na página do Docker Hub.
+
 Agora podemos subir o container e verificar se o banco de dados e a tabela configurados acima foram realmente criados.
 
 ```bash
@@ -161,7 +163,7 @@ services:
     volumes:
       - ./web:/usr/share/nginx/html/
     ports:
-      - 8080:80
+      - 80:80
 ```
 __*web/index.html*__
 ```html
@@ -195,11 +197,175 @@ __*web/index.html*__
 </html>
 ```
 
+Note que o `form action` ainda está vazio, portanto o formulário que foi criado não fará nada, por enquanto.
+
 Depois de subir os serviços, podemos verificar o log dos mesmos pelo comando abaixo:
 
 ```bash
 docker-compose logs -f -t
 ```
 
+## Chegamos na aplicação
 
+Já temos nosso banco de dados disponível e um front-end, agora precisamos iniciar o desenvolvimento do aplicativo, onde vamos usar o [Python](https://www.python.org) para enfileirar as mensagens incluídas no front-end.
 
+Para facilitar nosso trabalho será usado um micro web-framework, o [Bottle](https://bottlepy.org), portanto será necessário instalar esta dependência no container do Python que vamos utilizar.
+
+Vamos criar um diretório `app` onde será configurado um volume e neste diretório vamos criar o arquivo `app.sh`, onde vamos instalar nossa dependência através do comando [pip](https://packaging.python.org/tutorials/installing-packages/#installing-from-pypi).
+
+__*app/app.sh*__
+```bash
+#!/bin/sh
+
+# instalando dependência
+pip install bottle==0.12.13
+
+# subindo nossa aplicação
+python -u sender.py
+```
+
+Como podem notar, estamos chamando um programa Python `sender.py`, que também será criado dentro do mesmo volume `app`.
+
+__*app/sender.py*__
+```python
+# importando pacote
+from bottle import route, run, request
+
+# criando uma rota no raiz, que atende requisições POST
+@route('/', method='POST')
+
+# método que irá gravar no banco dados, mas por enquanto 
+# só vamos retornar uma mensagem formatada do formulário 
+# submetido pelo front-end
+def send():
+    assunto = request.forms.get('assunto')
+    mensagem = request.forms.get('mensagem')
+    return 'Mensagem enfileirada! Assunto: {} Mensagem: {}'.format(
+      assunto, mensagem
+    )
+
+# chamando o método na porta 8080
+if __name__ == '__main__':
+    run(host='0.0.0.0', port=8080, debug=True)
+```
+
+Precisamos ajustar o `index.html` para que a requisição do formulário seja realizada para o método Python acima.
+
+__*web/index.html*__
+```html
+<html>
+    <head>
+        <meta charset='uft-8'>
+        <title>E-mail Sender</title>
+        <style>
+            label { display: block; }
+            textarea, input { width: 400px; }
+        </style>
+    </head>
+    <body class="container">
+        <h1>E-mail Sender</h1>
+        <form action="http://localhost:8080" method="POST">
+            <div>
+                <label for="assunto">Assunto</label>
+                <input type="text" name="assunto">
+            </div>
+
+            <div>
+                <label for="mensagem">Mensagem</label>
+                <textarea name="mensagem" cols="50" rows="6"></textarea>
+            </div>
+
+            <div>
+                <button>Enviar !</button>
+            </div>
+        </form>
+    </body>
+</html>
+```
+
+E finalmente, vamos ajustar nosso `docker-compose.yaml` para disponibilizar esse novo container.
+
+```yaml
+version: '3'
+volumes:
+  dados:
+services:
+  db:
+    image: postgres:9.6
+  volumes:
+    # volume dos dados
+    - dados:/var/lib/postgresql/data
+    # scripts
+    - ./scripts:/scripts
+    - ./scripts:init.sql:/docker-entrypoint-initdb.d/init.sql
+  frontend:
+    image: nginx:1.13
+    volumes:
+      # Site
+      - ./web:/usr/share/nginx/html/
+    ports:
+      - 80:80  
+  app:
+    image: python:3.6
+    volumes:
+      # Aplicação
+      - ./app:/app
+    working_dir: /app
+    command: ./app.sh
+    # Porta Bottle
+    ports:
+      - 8080:8080
+```
+Vamos verificar se ficou algum serviço executando?
+
+```bash
+docker-compose ps
+```
+
+Se estiver com algum serviço em execução, vamos pará-lo antes de iniciar nossos containers novamente.
+
+```bash
+docker-compose down
+```
+
+Agora sim, podemos levantar nossos serviços...
+
+```bash
+docker-compose up -d
+```
+Ao iniciar os serviços do `docker-compose` você deve receber uma mensagem de erro, provavelmente deste jeito:
+
+```
+ERROR: for email-worker_app_1  Cannot start service app: OCI runtime create failed:
+container_linux.go:367: starting container process caused: exec: "./app.sh": permission denied: unknown
+```
+O que acontece é que nosso `script sh` não tem permissão de execução, há várias maneiras de solucionar isso, vou usar aquela que considero mais simples, na linha onde chamamos o *script*, altere como abaixo:
+
+```yaml
+app:
+    image: python:3.6
+    volumes:
+      # Aplicação
+      - ./app:/app
+    working_dir: /app
+    command: bash ./app.sh
+    # Porta Bottle
+    ports:
+      - 8080:8080
+```
+
+Depois de implementada a alteração no `docker-compose.yaml, já sabe, precisamos verificar se ficou algum serviço executando, parar os mesmos e levantar novamente.
+
+Vamos verificar como estão nossos serviços do docker?
+
+```bash
+docker-compose logs -f -t
+```
+
+Podemos testar nosso aplicação acessando no navegador o link http://localhost
+
+![email](images/email-sender.png)
+
+E temos um retorno da mensagem formatada, conforme definimos na nossa aplicação Python.
+
+![bottle](images/email-sender-bottle.png)
