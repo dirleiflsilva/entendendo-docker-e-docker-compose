@@ -161,6 +161,7 @@ services:
   frontend:
     image: nginx:1.13
     volumes:
+      # página web
       - ./web:/usr/share/nginx/html/
     ports:
       - 80:80
@@ -211,7 +212,7 @@ Já temos nosso banco de dados disponível e um front-end, agora precisamos inic
 
 Para facilitar nosso trabalho será usado um micro web-framework, o [Bottle](https://bottlepy.org), portanto será necessário instalar esta dependência no container do Python que vamos utilizar.
 
-Vamos criar um diretório `app` onde será configurado um volume e neste diretório vamos criar o arquivo `app.sh`, onde vamos instalar nossa dependência através do comando [pip](https://packaging.python.org/tutorials/installing-packages/#installing-from-pypi).
+Vamos criar uma nova pasta `app` onde será configurado um volume e na mesma vamos criar o arquivo `app.sh`, onde será instalada nossa dependência através do comando [pip](https://packaging.python.org/tutorials/installing-packages/#installing-from-pypi).
 
 __*app/app.sh*__
 ```bash
@@ -301,18 +302,18 @@ services:
   frontend:
     image: nginx:1.13
     volumes:
-      # Site
+      # página web
       - ./web:/usr/share/nginx/html/
     ports:
       - 80:80  
   app:
     image: python:3.6
     volumes:
-      # Aplicação
+      # aplicação
       - ./app:/app
     working_dir: /app
     command: ./app.sh
-    # Porta Bottle
+    # porta Bottle
     ports:
       - 8080:8080
 ```
@@ -345,16 +346,16 @@ O que acontece é que nosso `script sh` não tem permissão de execução, há v
 app:
     image: python:3.6
     volumes:
-      # Aplicação
+      # aplicação
       - ./app:/app
     working_dir: /app
     command: bash ./app.sh
-    # Porta Bottle
+    # porta Bottle
     ports:
       - 8080:8080
 ```
 
-Depois de implementada a alteração no `docker-compose.yaml, já sabe, precisamos verificar se ficou algum serviço executando, parar os mesmos e levantar novamente.
+Depois de implementada a alteração no `docker-compose.yaml`, já sabe, precisamos verificar se ficou algum serviço executando, parar os mesmos e levantar novamente.
 
 Vamos verificar como estão nossos serviços do docker?
 
@@ -369,3 +370,109 @@ Podemos testar nosso aplicação acessando no navegador o link http://localhost
 E temos um retorno da mensagem formatada, conforme definimos na nossa aplicação Python.
 
 ![bottle](images/email-sender-bottle.png)
+
+Como você notou temos 2 serviços respondendo em portas diferentes, desta forma conseguimos acessar nossa aplicação diretamente, pelo link http://locahost:8080. Será apresentado um erro, mas o serviço da aplicação pode ser acessado sem passar pela página web.
+
+![error405](images/http-error-405.png)
+
+Para que isto não ocorra vamos configurar um [Proxy Reverso no Nginx](https://docs.nginx.com/nginx/admin-guide/web-server/reverse-proxy/), desta forma não será mais necessário deixar a porta 8080 exposta.
+
+Aqui vale explicar um detalhe sobre o Docker Compose, quando você cria vários containers no ambiente do `compose`, um container tem acesso aos outros, desde que eles não sejam segregados em redes separadas. Portanto o container `frontend` consegue acessar o container `app` e é justamente isso que vamos usar para configurar nosso proxy reverso.
+
+A primeira coisa que precisamos fazer é criar o arquivo de configuração do proxy reverso, para isso crie um volume `nginx` como um arquivo de nome `default.conf`, que terá o conteúdo abaixo:
+
+```bash
+server {
+    listen 80;
+    server_name localhost;
+
+    location / {
+        root /usr/share/nginx/html;
+        index index.html index.htm;
+    }
+
+    error_page 500 502 503 504 /50x.html;
+    location = /50x.html {
+        root /usr/share/nginx/html;
+    }
+
+    # proxy reverso
+    location /api {
+        proxy_pass http://app:8080/;
+        proxy_http_version 1.1;
+    }
+}
+```
+Vamos precisar ajustar o arquivo `docker-compose.yaml`, incluindo o volume `nginx` no serviço `frontend` e excluindo a porta 8080 do nosso serviço `app'.
+
+```yaml
+version: '3'
+volumes:
+  dados:
+services:
+  db:
+    image: postgres:9.6
+  volumes:
+    # volume dos dados
+    - dados:/var/lib/postgresql/data
+    # scripts
+    - ./scripts:/scripts
+    - ./scripts:init.sql:/docker-entrypoint-initdb.d/init.sql
+  frontend:
+    image: nginx:1.13
+    volumes:
+      # página web
+      - ./web:/usr/share/nginx/html/
+      # configuração proxy reverso
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
+    ports:
+      - 80:80  
+app:
+    image: python:3.6
+    volumes:
+      # aplicação
+      - ./app:/app
+    working_dir: /app
+    command: bash ./app.sh
+```
+
+Por último, vamos alterar o atributo *action* do *index.html* conforme abaixo.
+
+```html
+<html>
+    <head>
+        <meta charset='uft-8'>
+        <title>E-mail Sender</title>
+        <style>
+            label { display: block; }
+            textarea, input { width: 400px; }
+        </style>
+    </head>
+    <body class="container">
+        <h1>E-mail Sender</h1>
+        <form action="http://localhost/api" method="POST">
+            <div>
+                <label for="assunto">Assunto</label>
+                <input type="text" name="assunto">
+            </div>
+
+            <div>
+                <label for="mensagem">Mensagem</label>
+                <textarea name="mensagem" cols="50" rows="6"></textarea>
+            </div>
+
+            <div>
+                <button>Enviar !</button>
+            </div>
+        </form>
+    </body>
+</html>
+```
+Vamos subir nossos serviços e verificar o resultado.
+
+![proxy-page](images/proxy-reverso-page.png)
+
+Com o envio dos dados para a aplicação, temos o retorno, mas veja o detalhe do link, *http://localhost/api*.
+
+![proxy-api](images/proxy-reverso-api.png)
+
