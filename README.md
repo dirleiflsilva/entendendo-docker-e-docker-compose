@@ -1,6 +1,8 @@
 # Entendendo Docker e Docker Compose
 
-O que um desenvolvedor de software precisa saber sobre Docker e Docker Compose?
+[![License][license-badge]][license-url]
+
+> O que um desenvolvedor de software precisa saber sobre Docker e Docker Compose?
 
 Não tenho a intenção de explicar o que é Docker ou Docker Compose, muito menos de demonstrar como essas ferramentas são instaladas. As páginas de documentação das mesmas já o fazem de maneira simples e objetiva, então te convido a visitar os links abaixo e verificar como isto pode ser realizado no seu sistema operacional.
 
@@ -30,9 +32,9 @@ Nosso projeto será uma aplicação simples para envio de e-mails com Workers, n
 
 * Banco de Dados
 * Servidor Web
+* Aplicação principal
 * Gerenciador de filas
 * Workers para envio de e-mail
-* Aplicação principal
 
 Podemos visualizar a estrutura final desses serviços conforme segue.
 
@@ -42,7 +44,7 @@ O Docker Compose usa um arquivo de configuração no padrão [YAML](https://yaml
 
 ## Iniciando com o banco de dados
 
-Vamos utilizar o [PostgreSQL 9.6](https://www.postgresql.org) para persistir nosso dados, um detalhe no desenvolvimento de um projeto com vários serviços é utilizar uma versão específica dos componentes, isto vai evitar que sua aplicação quebre, pois no Docker, quando não é informada a versão, será utilizada a mais recente, com a tag *latest*.
+Vamos utilizar o [PostgreSQL 9.6](https://www.postgresql.org) para persistir nosso dados, um detalhe no desenvolvimento de um projeto com vários serviços é utilizar uma versão específica dos componentes, isto vai evitar que sua aplicação "quebre", pois no Docker, quando não é informada a versão, será utilizada a mais recente, com a tag *latest*.
 
 ```yaml
 version: '3'
@@ -87,7 +89,7 @@ No nosso projeto vamos criar as pastas `postgres_data` e `scripts`, como pode se
 
 ![pastas](images/folder-docker-compose.png)
 
-Em `scripts`, vamos gerar 2 arquivos: *init.sql*, onde vamos criar o banco de dados `email_sender` e definir a tabela `emails`, no arquivo *check.sql*, vamos listar os bancos de dados, conectar no banco `email_sender` e mostrar como a tabela `emails` está configurada.
+Em `scripts`, vamos ter 2 arquivos: *init.sql*, onde vamos criar o banco de dados `email_sender` e definir a tabela `emails`, e no arquivo *check.sql*, vamos listar os bancos de dados, conectar no banco `email_sender` e mostrar como a tabela `emails` está configurada.
 
 __*scripts/init.sql*__
 ```sql
@@ -403,7 +405,7 @@ server {
     }
 }
 ```
-Vamos precisar ajustar o arquivo `docker-compose.yaml`, incluindo o volume `nginx` no serviço `frontend` e excluindo a porta 8080 do nosso serviço `app'.
+Vamos precisar ajustar o arquivo `docker-compose.yaml`, incluindo o volume `nginx` no serviço `frontend` e excluindo a porta 8080 do nosso serviço `app`.
 
 ```yaml
 version: '3'
@@ -476,3 +478,97 @@ Com o envio dos dados para a aplicação, temos o retorno, mas veja o detalhe do
 
 ![proxy-api](images/proxy-reverso-api.png)
 
+## Voltando ao início?
+
+Lembra que o primeiro serviço que configuramos e subimos foi o banco de dados? Pois chegou a hora de começar a usá-lo.
+
+Para isso vamos precisar ajustar alguns detalhes da nossa aplicação, precisamos instalar a dependência [Psycopg](https://www.psycopg.org), para que seja possível conectar o Python ao PostgreSQL e persistir esses dados. Vamos começar pelo `app.sh`, onde vamos incluir a instalação deste novo pacote.
+
+```bash
+#!/bin/sh
+
+# instalando dependências
+pip install bottle==0.12.13 psycopg2==2.7.4
+
+# subindo nossa aplicação
+python -u sender.py
+```
+
+E para que seja possível realizar a conexão com o PostgreSQL e gravar os dados, vamos ajustar o script `sender.py`.
+
+```python
+# importando pacotes
+import psycopg2
+from bottle import route, run, request
+
+# Data Source Name
+# podemos identificar o host pelo IP ou pelo nome do serviço no Compose
+DSN = 'dbname = email_sender user = postgres host = db'
+
+# query para inserir os dados
+SQL = 'INSERT INTO emails (assunto, mensagem) VALUES (%s, %s)'
+
+# método para conectar no PostgreSQL e gravar os dados
+def register_message(self, assunto, mensagem):
+    conn = psycopg2.connect(DSN)
+    cur = conn.cursor()
+    cur.execute(SQL, (assunto, mensagem))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    print('Mensagem registrada!')  
+
+# criando uma rota no raiz, que atende requisições POST
+@route('/', method='POST')
+
+# método que irá chamar o método register_message e
+# retornar uma mensagem formatada
+def send():
+    assunto = request.forms.get('assunto')
+    mensagem = request.forms.get('mensagem')
+
+    register_message(assunto, mensagem)
+    
+    return 'Mensagem enfileirada! Assunto: {} Mensagem: {}'.format(
+      assunto, mensagem
+    )
+
+# chamando o método na porta 8080
+if __name__ == '__main__':
+    run(host='0.0.0.0', port=8080, debug=True)
+```
+Depois dessas alterações podemos subir os serviços e realizar um teste para verificar se os dados estão sendo gravados no PostgreSQL.
+
+![email-db](/images/email-db-envio.png)
+
+Podemos verificar que houve o retorno, conforme desenhado na nossa aplicação...
+
+![email-msg](/images/email-db-msg.png)
+
+mas será que os dados foram gravados no banco de dados? Vamos verificar?
+
+```bash
+docker-compose exec db psql -U postgres -d email_sender -c "SELECT * FROM emails"
+```
+![email-select](/images/email-db-select.png)
+
+> Mais uma etapa finalizada!
+
+#### License
+[MIT](https://github.com/dirleif/entendendo-docker-e-docker-compose/blob/main/LICENSE)
+
+#### Fontes:
+<https://docs.docker.com>
+<https://docs.docker.com/compose>
+<https://github.com/compose-spec/compose-spec/blob/master/spec.md>
+<https://yaml.org>
+<https://hub.docker.com/_/postgres>
+<fttps://hub.docker.com/_/nginx>
+<https://hub.docker.com/_/python>
+<https://bottlepy.org>
+<https://packaging.python.org/tutorials/installing-packages/#installing-from-pypi>
+<https://docs.nginx.com/nginx/admin-guide/web-server/reverse-proxy>
+
+[license-badge]: https://img.shields.io/github/license/dirleif/entendendo-docker-e-docker-compose
+[license-url]: https://opensource.org/licenses/MIT
