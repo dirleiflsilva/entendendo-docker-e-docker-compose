@@ -365,7 +365,7 @@ Vamos verificar como estão nossos serviços do docker?
 docker-compose logs -f -t
 ```
 
-Podemos testar nosso aplicação acessando no navegador o link http://localhost
+Podemos testar nossa aplicação acessando no navegador o link http://localhost
 
 ![email](images/email-sender.png)
 
@@ -470,7 +470,7 @@ Por último, vamos alterar o atributo *action* do *index.html* conforme abaixo.
     </body>
 </html>
 ```
-Vamos subir nossos serviços e verificar o resultado.
+Vamos subir nossos serviços e verificar o resultado?
 
 ![proxy-page](images/proxy-reverso-page.png)
 
@@ -493,7 +493,6 @@ pip install bottle==0.12.13 psycopg2==2.7.4
 # subindo nossa aplicação
 python -u sender.py
 ```
-
 E para que seja possível realizar a conexão com o PostgreSQL e gravar os dados, vamos ajustar o script `sender.py`.
 
 ```python
@@ -555,20 +554,206 @@ docker-compose exec db psql -U postgres -d email_sender -c "SELECT * FROM emails
 
 > Mais uma etapa finalizada!
 
+## Fila e Workers
+
+Vamos criar 2 (dois) novos containers, um que vai ser nossa fila, baseado no [Redis](https://redis.io) e um [worker](https://docs.docker.com/engine/reference/commandline/service_scale), implementado em Python, que vai consumir as mensagens dessa fila para envio de e-mail, no nosso caso será apenas uma simulação de envio.
+
+> Como todos os serviços tem seu próprio container é possível escalar parte dessa estrutura, justamente o que faremos com nosso worker.
+
+Então mãos à obra que temos várias mudanças a serem implementadas, e vamos começar pelo `docker-compose.yaml`.
+
+```yaml
+version: '3'
+volumes:
+  dados:
+services:
+  db:
+    image: postgres:9.6
+    environment:
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      # volume dos dados
+      - ./postgres_data:/var/lib/postgresql/data
+      # scripts
+      - ./scripts:/scripts
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+  frontend:
+    image: nginx:1.13
+    volumes:
+      # página web
+      - ./web:/usr/share/nginx/html/
+      # configuração proxy reverso
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
+    ports:
+      - 80:80
+  app:
+    image: python:3.6
+    volumes:
+      # Aplicação
+      - ./app:/app
+    working_dir: /app
+    command: bash ./app.sh
+  queue:
+    image: redis:3.2
+  worker:
+    image: python:3.6
+    volumes:
+      # worker
+      - ./worker:/worker
+    working_dir: /worker
+    command: bash ./app.sh
+```
+
+Vamos incluir o nosso serviço de fila `queue` e nosso `worker`, neste último vamos utilizar a mesma estratégia do serviço `app`, onde as dependências do Python foram colocadas em um script `sh`.
+
+Antes de implementarmos o nosso `worker` precisamos realizar alguns ajustes no nosso serviço `app`, será incluída a dependência do *Redis*, pois a aplicação além de inserir no banco de dados, vai enviar a mensagem para a fila, que é justamente o *Redis*.
+
+```bash
+#!/bin/sh
+
+# instalando dependência
+pip install bottle==0.12.13 psycopg2==2.7.4 redis==2.10.5
+
+# subindo nossa aplicação
+python -u sender.py
+```
+
+... e vamos aproveitar para realizar uma refatoração no `sender.py`
+
+```python
+# importando pacotes
+import psycopg2
+import redis
+import json
+from bottle import Bottle, request
+
+# classe que vai herdar de Bottle
+class Sender(Bottle):
+    # criando inicializações
+    def __init__(self):
+        # super() nos permite sobrescrever métodos e alterar comportamentos
+        super().__init__()
+        self.route('/',method='POST',callback=self.send)
+        # utilizamos o nome do serviço para identificar o host
+        self.fila = redis.StrictRedis(host='queue', port=6379, db=0)
+        
+        # Data Source Name
+        # podemos identificar o host pelo IP ou pelo nome do serviço no Compose
+        DSN = 'dbname = email_sender user=postgres password=postgres host=db'
+        self.conn = psycopg2.connect(DSN)
+
+    # método para conectar no PostgreSQL e gravar os dados
+    def register_message(self, assunto, mensagem):
+        # query para inserir os dados
+        SQL = 'INSERT INTO emails (assunto, mensagem) VALUES (%s, %s)'
+
+        cur = self.conn.cursor()
+        cur.execute(SQL, (assunto, mensagem))
+        self.conn.commit()
+        cur.close()
+
+        # inserir no Redis através do atributo msg  
+        msg = {'assunto': assunto, 'mensagem': mensagem}
+        # mandando para a fila sender no formato json
+        self.fila.rpush('sender', json.dumps(msg))
+
+        print('Mensagem registrada!')  
+
+    # método que irá chamar o método register_message e
+    # retornar uma mensagem formatada
+    def send(self):
+        assunto = request.forms.get('assunto')
+        mensagem = request.forms.get('mensagem')
+
+        self.register_message(assunto, mensagem)
+
+        return 'Mensagem enfileirada! Assunto: {} Mensagem: {}'.format(
+          assunto, mensagem
+        )
+
+# chamando o método na porta 8080
+if __name__ == '__main__':
+    # criando instancia
+    sender = Sender()
+    sender.run(host='0.0.0.0', port=8080, debug=True)
+```
+
+Vamos criar a pasta `worker` e criar um arquivo `work.sh` onde vamos fazer a instalação das dependências.
+
+__*worker/work.sh*__
+```bash
+#!/bin/bash
+
+# instalando dependência
+pip install redis==2.10.5
+
+# subindo o worker
+python -u worker.py
+```
+
+__*worker/worker.py*__
+```python
+import redis
+import json
+from time import sleep
+from random import randint
+
+if __name__ == '__main__':
+    r = redis.Redis(host='queue', port=6379, db=0)
+    # laço para consumir as mensagens
+    while True:
+        # vamos pegar a mensagem na fila sender
+        mensagem = json.loads(r.blpop('sender')[1])
+        # simulando envio de e-mail ...
+        print('Mandando a mensagem:',mensagem['assunto'])
+        # calculando um randômico inteiro para o Sleep
+        sleep(randint(15,35))
+        print("Mensagem", mensagem['assunto'], '... enviada com sucesso!')
+```
+Agora precisamos iniciar nosso serviço e monitorar os _logs_ para verificar o envio das mensagens
+
+```bash
+docker-compose up -d
+docker-compose logs -f -t
+```
+
+Vamos cadastrar uma mensagem na aplicação e ...
+
+![email-worker](/images/email-sender-worker.png)
+
+verificar o resultado no log.
+
+![email-worker-log](/images/email-sender-worker-log.png)
+
 #### License
 [MIT](https://github.com/dirleif/entendendo-docker-e-docker-compose/blob/main/LICENSE)
 
 #### Fontes:
 <https://docs.docker.com>
+
 <https://docs.docker.com/compose>
+
 <https://github.com/compose-spec/compose-spec/blob/master/spec.md>
+
 <https://yaml.org>
+
 <https://hub.docker.com/_/postgres>
-<fttps://hub.docker.com/_/nginx>
+
+<https://hub.docker.com/_/nginx>
+
 <https://hub.docker.com/_/python>
+
 <https://bottlepy.org>
+
 <https://packaging.python.org/tutorials/installing-packages/#installing-from-pypi>
+
 <https://docs.nginx.com/nginx/admin-guide/web-server/reverse-proxy>
+
+<https://redis.io>
+
+<https://docs.docker.com/engine/reference/commandline/service_scale>
+
+<https://docs.python.org/3/library/functions.html#super>
 
 [license-badge]: https://img.shields.io/github/license/dirleif/entendendo-docker-e-docker-compose
 [license-url]: https://opensource.org/licenses/MIT
