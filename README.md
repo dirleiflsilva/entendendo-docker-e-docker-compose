@@ -143,7 +143,7 @@ docker-compose exec db psql -U postgres -f /scripts/check.sql
 
 ## Vamos ao Front-End
 
-Nosso próximo passo é criar um serviço web, para isto vamos utilizar o [Nginx](https://nginx.org), que neste primeiro momento proverá apenas uma página estática simples, sem nenhuma ação por trás. Para isso vamos ajustar o nosso arquivo `docker-compose.yaml` e criar um volume, onde será gerado um arquivo *index.html*.
+Nosso próximo passo é criar um serviço web, para isto vamos utilizar o [Nginx](https://nginx.org), que neste primeiro momento proverá apenas uma página estática simples, sem nenhuma ação por trás. Para isso vamos ajustar o nosso arquivo `docker-compose.yaml` e montar um volume, onde será criado um arquivo *index.html*.
 
 ```yaml
 version: '3'
@@ -601,7 +601,7 @@ services:
       # worker
       - ./worker:/worker
     working_dir: /worker
-    command: bash ./app.sh
+    command: bash ./work.sh
 ```
 
 Vamos incluir o nosso serviço de fila `queue` e nosso `worker`, neste último vamos utilizar a mesma estratégia do serviço `app`, onde as dependências do Python foram colocadas em um script `sh`.
@@ -725,6 +725,124 @@ verificar o resultado no log.
 
 ![email-worker-log](/images/email-sender-worker-log.png)
 
+## Dependênicas, redes e escalabilidade
+
+[depends_on](https://docs.docker.com/compose/compose-file/compose-file-v3/#depends_on) cria uma dependência expressa entre serviços, que server para 2 coisas: 
+
+* primeiro para orquestrar a inicialização dos serviços, ou seja, o *docker* vai começar pelos serviços que não dependem de nenhum outro e depois vai buscando pelas dependências configuradas e executando por essa ordem. 
+* A outra é que se for inicializado um serviço específico, por exemplo, se inicializar o serviço `frontend` com o comando:
+
+```bash
+docker-compose up frontend
+```
+
+será primeiro verificada a dependência existente neste serviço e inicializada a mesma antes do serviço especificado, vamos entender melhor isso após a configuração do nosso arquivo `docker-compose.yaml`.
+
+Você deve ter notado que quando executamos o comando `docker-compose up -d`, além dos serviços que estamos configurando, é inicializado um serviço de rede, ou seja, nossos containers são executados em uma rede própria do *docker*, então é uma boa prática segregar esses serviços em suas próprias redes, isto é feito como a criação de uma sessão `networks`.
+
+Então, vamos configurar nosso `docker-compose.yaml` definindo as dependências entre os serviços através do `depends_on` e criar as redes, que podem ser consultadas lá no início deste documento.
+
+```yaml
+version: '3'
+volumes:
+  dados:
+networks:
+  banco:
+  web:
+  fila:
+services:
+  db:
+    image: postgres:9.6
+    environment:
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      # volume dos dados
+      - ./postgres_data:/var/lib/postgresql/data
+      # scripts
+      - ./scripts:/scripts
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - banco
+  frontend:
+    image: nginx:1.13
+    volumes:
+      # página web
+      - ./web:/usr/share/nginx/html/
+      # configuração proxy reverso
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
+    ports:
+      - 80:80
+    networks:
+      - web
+    depends_on:
+      - app
+  app:
+    image: python:3.6
+    volumes:
+      # Aplicação
+      - ./app:/app
+    working_dir: /app
+    command: bash ./app.sh
+    networks:
+      - banco
+      - web
+      - fila
+    depends_on:
+      - db
+      - queue
+  queue:
+    image: redis:3.2
+    networks:
+      - fila
+  worker:
+    image: python:3.6
+    volumes:
+      # worker
+      - ./worker:/worker
+    working_dir: /worker
+    command: bash ./work.sh
+    networks:
+      - fila
+```
+
+Note que definimos que o serviço `frontend` depende do serviço `app` e o serviço `app` depende do serviço `db`, esta cadeia de dependência faz com que ao subir especificamente o serviço `frontend`, o `docker-compose` inicie o serviço `app` e consequentemente o serviço `db`, para maiores detalhes recomendo verificar a documentação.
+
+Que tal testarmos nossa configuração de rede?
+
+```bash
+docker-compose up -d
+```
+
+Você vai ter um retorno parecido com este...
+
+```bash
+Building with native build. Learn about native build in Compose here: https://docs.docker.com/go/compose-native-build/
+Creating network "email-worker_banco" with the default driver
+Creating network "email-worker_fila" with the default driver
+Creating network "email-worker_web" with the default driver
+Creating email-worker_queue_1  ... done
+Creating email-worker_db_1     ... done
+Creating email-worker_worker_1 ... done
+Creating email-worker_app_1    ... done
+Creating email-worker_frontend_1 ... done
+```
+
+E agora vamos verificar se as dependências configuradas vão funcionar como esperado?
+
+```bash
+docker-compose up -d frontend
+```
+
+Teremos uma saída como esta:
+
+```bash
+Building with native build. Learn about native build in Compose here: https://docs.docker.com/go/compose-native-build/
+Starting email-worker_db_1    ... done
+Starting email-worker_queue_1 ... done
+Starting email-worker_app_1   ... done
+Starting email-worker_frontend_1 ... done
+```
+
 #### License
 [MIT](https://github.com/dirleif/entendendo-docker-e-docker-compose/blob/main/LICENSE)
 
@@ -754,6 +872,8 @@ verificar o resultado no log.
 <https://docs.docker.com/engine/reference/commandline/service_scale>
 
 <https://docs.python.org/3/library/functions.html#super>
+
+<https://docs.docker.com/compose/compose-file/compose-file-v3/#depends_on>
 
 [license-badge]: https://img.shields.io/github/license/dirleif/entendendo-docker-e-docker-compose
 [license-url]: https://opensource.org/licenses/MIT
