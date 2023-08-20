@@ -7,11 +7,11 @@ networks:
   fila:
 services:
   db:
-    image: postgres:9.6
+    image: postgres:14.8
     environment:
       POSTGRES_PASSWORD: postgres
     volumes:
-      # volume dos dados
+      # volume dados
       - ./postgres_data:/var/lib/postgresql/data
       # scripts
       - ./scripts:/scripts
@@ -19,7 +19,7 @@ services:
     networks:
       - banco
   frontend:
-    image: nginx:1.13
+    image: nginx:1.18
     volumes:
       # página web
       - ./web:/usr/share/nginx/html/
@@ -29,12 +29,12 @@ services:
       - 80:80
     networks:
       - web
-    depends_on: 
+    depends_on:
       - app
   app:
-    image: python:3.6
+    image: python:3.10
     volumes:
-      # Aplicação
+      # aplicação
       - ./app:/app
     working_dir: /app
     command: bash ./app.sh
@@ -42,22 +42,25 @@ services:
       - banco
       - web
       - fila
-    depends_on: 
+    depends_on:
       - db
       - queue
+    # substituído em docker-compose-override.yaml
+    # criando variável ambiente
+    #environment:
+    #  - DB_NAME=email_sender
   queue:
-    image: redis:3.2
+    image: redis:6.2
     networks:
       - fila
   worker:
-    image: python:3.6
+    build: worker
     volumes:
       # worker
       - ./worker:/worker
     working_dir: /worker
-    command: bash ./work.sh
+    command: worker.py
     networks:
       - fila
     depends_on:
       - queue
-    

@@ -2,6 +2,7 @@
 import psycopg2
 import redis
 import json
+import os # lib para ler variáveis de ambiente
 from bottle import Bottle, request
 
 # classe que vai herdar de Bottle
@@ -11,14 +12,27 @@ class Sender(Bottle):
         # super() nos permite sobrescrever métodos e alterar comportamentos
         super().__init__()
         self.route('/',method='POST',callback=self.send)
-        # utilizamos o nome do serviço para identificar o host
-        self.fila = redis.StrictRedis(host='queue', port=6379, db=0)
         
-        # Data Source Name
-        # podemos identificar o host pelo IP ou pelo nome do serviço no Compose
-        DSN = 'dbname = email_sender user=postgres password=postgres host=db'
-        self.conn = psycopg2.connect(DSN)
-
+        # uso da variável de ambiente REDIS_HOST
+        # se não for localizada a variável ou seu conteúdo
+        # será utilizado um padrão, no caso <queue>
+        redis_host = os.getenv('REDIS_HOST','queue')
+        self.fila = redis.StrictRedis(host=redis_host, port=6379, db=0)
+        
+        # Diversas variáveis de ambiente (incluindo o DB_NAME)
+        db_host = os.getenv('DB_HOST', 'db')
+        db_user = os.getenv('DB_USER', 'postgres')
+        db_psw = os.getenv('DB_PSW', 'postgres')
+        db_name = os.getenv('DB_NAME','sender') 
+        # note que db_name está diferente do usado até agora
+        # mas em seguida vamos mostrar que esta variável será
+        # exposta no <docker-compose.yaml>
+ 
+        # Uso das variáveis de ambiente para conexão com o banco de dados
+        dsn = f'dbname={db_name} user={db_user} password={db_psw} host={db_host}'
+        print(dsn)
+        self.conn = psycopg2.connect(dsn)
+        
     # método para conectar no PostgreSQL e gravar os dados
     def register_message(self, assunto, mensagem):
         # query para inserir os dados
